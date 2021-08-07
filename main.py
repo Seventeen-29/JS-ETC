@@ -92,9 +92,18 @@ def update_positions_from_ack(message):
     order = convert_history[order_id]
     factor = (1 if (order["dir"] == "BUY") else -1)
     amt = order["size"]
-    if message["symbol"] == "XLF":
-        positions["XLF"] += factor * amt
-        positions["BOND"] 
+    if order["symbol"] == "XLF":
+        amt = amt // 10
+        print("confirm XLF convert")
+        positions["XLF"] += factor * amt * 10
+        positions["BOND"] -= factor * amt * 3
+        positions["GS"] -= factor * amt * 2
+        positions["MS"] -= factor * amt * 3
+        positions["WFC"] -= factor * amt * 2
+    elif order["symbol"] == "VALE":
+        print("confirm VALE convert")
+        positions["VALE"] += factor * amt
+        positions["VALBZ"] -= factor * amt
         
 
 
@@ -124,9 +133,10 @@ def do_order(symbol, dir, price, size):
 convert_history = {}
 
 def convert(symbol, dir, size):
-    global order_count
+    global order_count, last_convert_time
     order = {"type": "convert", "order_id": order_count, "symbol": symbol, "dir": dir, "size": size}
     convert_history[order_count] = order
+    last_convert_time = time.time()
     write_to_exchange(exchange, order)
     order_count += 1
 
@@ -163,15 +173,19 @@ def trade_adr(message):
         ## if VALE buy is more expensive than VALBZ, then buy VALBZ and sell VALE
         if VALE_fair > VALBZ_fair:
             ## buy VABLZ, sell VALE
-            do_multi_trade(["VALBZ"], ["VALE"])
+            # do_multi_trade(["VALBZ"], ["VALE"])
             if last_symbol_order["VALBZ"] < last_symbol_order["VALE"]:
-                do_order("VALBZ", "BUY", VALBZ_buy[0], VALBZ_buy[1])
+                do_order("VALBZ", "BUY", VALBZ_buy[0], 1)
             else:
-                do_order("VALE", "SELL", VALE_sell[0], VALE_sell[1])
+                do_order("VALE", "SELL", VALE_sell[0], 1)
         
         else:
             ## sell VALBZ, buy VALE
-            do_multi_trade(["VALE"], ["VALBZ"])
+            # do_multi_trade(["VALE"], ["VALBZ"])
+            if last_symbol_order["VALBZ"] < last_symbol_order["VALE"]:
+                do_order("VALBZ", "BUY", VALBZ_buy[0], 1)
+            else:
+                do_order("VALE", "SELL", VALE_sell[0], 1)
 
     else:
         return
@@ -185,13 +199,13 @@ def do_multi_trade(buy_side, sell_side):
     else:
         print("WARNING: WEIRD SPOT 1")
         return
-    my_order = best_book(trade_symbol, trade_dir)
+    my_order = best_book(trade_symbol, trade_dir.upper())
     do_order(trade_symbol, trade_dir.upper(), my_order[0], my_order[1])
 
 
 
 def trade_etf(message):
-    edge = 1
+    edge = 3
     conversion = 100
     
     if not has_book(["BOND", "GS", "MS", "WFC", "XLF"]):
@@ -213,21 +227,50 @@ def trade_etf(message):
     WFC_fair = (WFC_buy[0] + WFC_sell[0]) / 2.0
     XLF_fair = (XLF_buy[0] + XLF_sell[0]) / 2.0
     
+    GS_time_fair = exec_fair_value("GS")
+    MS_time_fair = exec_fair_value("MS")
+    WFC_time_fair = exec_fair_value("WFC")
+    XLF_time_fair = exec_fair_value("XLR")
     
     basket_fair = (3 * BOND_fair + 2 * GS_fair + 3 * MS_fair + 2 * WFC_fair) / 10
-    print("basket/xlf fair", basket_fair, XLF_fair)
+    
+    basket_time_fair = (3 * BOND_fair + 2 * GS_time_fair + 3 * MS_time_fair + 2 * WFC_time_fair) / 10
+    
+    # print("basket/xlf fair", basket_fair, XLF_fair)
+    # print("[TIME AVG] basket/xlf fair", basket_time_fair, XLF_time_fair)
     
     ## if basket sum > ETF, we should buy ETF and sell basket
-    if basket_fair > XLF_fair + edge:
+    if basket_time_fair > XLF_fair + edge:
         # consider adding a check to not trade bonds at a bad price
-        print("buying xlf, selling basket")
-        do_multi_trade(["XLF"], [])
+        # print("buying xlf, selling basket")
+        # do_multi_trade(["XLF"], [])
         # do_multi_trade(["XLF"], ["BOND", "GS", "MS", "WFC"])
-        return
-    elif basket_fair < XLF_fair:
-        print("selling xlf, buying basket")
+
+        ## buying num amount of ETF 
+        num = XLF_buy[1]
+        if num < 10:
+            do_order
+            pass
+            ## buy num ETF
+        else:
+            num = num - num%10
+            num_ten = num // 10
+            ## buy num ETF
+            ## sell 3 bond, 3 gs, 3 ms, 2 wfc      
+        return 
+    elif basket_time_fair < XLF_fair:
+        num = XLF_sell[1]
+        # print("selling xlf, buying basket")
         do_multi_trade([], ["XLF"])
         # do_multi_trade(["BOND", "GS", "MS", "WFC"], ["XLF"])
+        if num < 10:
+            ## just sell ETF
+            pass
+        else: 
+            num = num - num%10
+            num_ten = num // 10
+            ## sell num ETF
+            ## buy 3 bond, 3 gs, 3 ms, 2 wfc
         return
 
 def num_traded(symbol):
@@ -236,11 +279,11 @@ def num_traded(symbol):
         sum += arr[1]
     return sum
     
-def xlf_basket_FV():
-    
-    
 
 def exec_fair_value(symbol):
+    if symbol not in executed_trades:
+        return 0
+
     sum = 0
     num = 0
     for arr in executed_trades[symbol]:
@@ -279,22 +322,24 @@ def convert_ADR():
     VALBZ_fair = (VALBZ_buy[0] + VALBZ_sell[0]) / 2.0
     VALE_fair = (VALE_buy[0] + VALE_sell[0]) / 2.0
 
-    if positions["VALE"] > 8:
+    if positions["VALE"] > 8 or positions["VALBZ"] < -8:
         ## we want to convert VALE => VALBZ
         if VALBZ_fair > VALE_fair + conversion/4.0:
             convert("VALE", "SELL", 4)
             return  
-    elif positions["VALE"] < -8:
+        if positions["VALE"] == 10 or positions["VALBZ"] == -10:
+            convert("VALE", "SELL", 4)
+            return
+    elif positions["VALE"] < -8 or positions["VALBZ"] > 8:
         ## we want to convert VALBZ to VALE
+        #### FIX THIS SO IT CHECKS A BIT AT LEAST
         if VALE_fair > VALBZ_fair + conversion/4.0:
             convert("VALE", "BUY", 4)
             return
-    elif positions["VALBZ"] > 8:
-        ## we want to convert VALBZ to VALE
-        pass
-    elif positions["VALBZ"] < -8:
-        ## we want to convert VALE => VALBZ
-        pass
+        if positions["VALE"] == -10 or positions["VALBZ"] == 10:
+            convert("VALE", "BUY", 4)
+            return
+    return
 
 def convert_ETF():
     global positions
@@ -327,24 +372,25 @@ def convert_ETF():
 
     for symbol in hundred:
         if symbol == "XLF":
-            if positions[symbol] > 80: ## we have too many ETF
+            CONVERT_THRESHOLD = 80
+            CONVERT_AMT = 40
+            if positions[symbol] > CONVERT_THRESHOLD: ## we have too many ETF
                 ## convert ETF to individual stock
-                if basket_fair >  XLF_fair + conversion/40:
+                if basket_fair >  XLF_fair + conversion / CONVERT_AMT:
                     print("CONVERT XLF SELL")
-                    convert("XLF", "SELL", 40)
+                    convert("XLF", "SELL", CONVERT_AMT)
                     return
-            elif positions[symbol] < -80: ## too little ETF
-                if basket_fair +  conversion/40< XLF_fair:
+            elif positions[symbol] < -CONVERT_THRESHOLD: ## too little ETF
+                if basket_fair +  conversion/CONVERT_AMT< XLF_fair:
                     print("CONVERT XLF BUY")
                     ## we will convert individual stocks to ETF
-                    convert("XLF", "BUY", 40)
+                    convert("XLF", "BUY", CONVERT_AMT)
                     return
         else:
             if positions[symbol] > 80: ## we have too much of an individual stock
                 pass
             elif positions[symbol] < -80: ## we have too little of an invidual sotck
                 pass       
-        return
         
 def allowed_positions(message):
     pass
@@ -352,6 +398,8 @@ def allowed_positions(message):
 def time_since(prev_time):
     return time.time() - last_reset_time
 
+TIME_BETWEEN_CONVERT = 1.0
+last_convert_time = time.time()
 
 def main():
     global exchange, positions, book
@@ -387,9 +435,14 @@ def main():
                 trade_etf(message)
         elif message["type"] == "fill":
             update_positions(message)
-            convert_ETF()
+            if time_since(last_convert_time) > TIME_BETWEEN_CONVERT:
+                convert_ETF()
+                convert_ADR()
         elif message["type"] == "trade":
             update_executed(message)
+        elif message["type"] == "ack":
+            update_positions_from_ack(message)
+
 
 
 
