@@ -21,7 +21,7 @@ test_mode = True
 # 0 is prod-like
 # 1 is slower
 # 2 is empty
-test_exchange_index = 2
+test_exchange_index = 0
 prod_exchange_hostname = "production"
 
 port = 25000 + (test_exchange_index if test_mode else 0)
@@ -50,6 +50,7 @@ order_count = 0
 
 
 def do_order(symbol, dir, price, size):
+    global order_count
     write_to_exchange(exchange, {"type": "add", "order_id": order_count, "symbol": symbol, "dir": dir, "price": price, "size": size})
     order_count += 1
 
@@ -57,16 +58,23 @@ def do_order(symbol, dir, price, size):
 def trade_bonds(message):
     buy_side = message["buy"]
     sell_side = message["sell"]
-    best_buy = buy_side[0]
-    best_sell = sell_side[0]
-    if best_buy[0] > 1000:
-        # send busell
-        do_order("BOND", "SELL", best_buy[0], best_buy[1])
-        return
+    if len(buy_side) > 0:
+        best_buy = buy_side[0]
+        if best_buy[0] > 1000:
+            do_order("BOND", "SELL", best_buy[0], best_buy[1])
+            return
 
-    if best_sell[0] < 1000:
-        do_order("BOND", "BUY", best_sell[0], best_sell[1])
-        return
+    if len(sell_side) > 0:
+        best_sell = sell_side[0]
+        if best_sell[0] < 1000:
+            do_order("BOND", "BUY", best_sell[0], best_sell[1])
+            return
+
+def trade_adr(message):
+    pass
+
+def trade_etf(message):
+    pass
 
     
 
@@ -92,6 +100,11 @@ def main():
         elif message["type"] == "book":
             if message["symbol"] == "BOND":
                 trade_bonds(message)
+            elif message["symbol"] == "VALBZ" or message["symbol"] == "VALE":
+                trade_adr(message)
+            else:
+                trade_etf(message)
+
 
 
 
