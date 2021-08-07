@@ -46,6 +46,7 @@ def read_from_exchange(exchange):
 # ~~~~~============== MAIN LOOP ==============~~~~~
 
 order_count = 0
+positions = {"VALBZ": {"buy": 0, "sell": 10000}, "VALE": {"buy": 0, "sell": 10000}}
 
 
 
@@ -73,6 +74,14 @@ def trade_bonds(message):
 def trade_adr(message):
     pass
 
+def update_adr(message):
+    if message["symbol"] == "VALBZ":
+        pass
+    else: 
+        pass
+
+
+
 def trade_etf(message):
     pass
 
@@ -84,6 +93,7 @@ def trade_etf(message):
 
 def main():
     global exchange
+    global positions
     exchange = connect()
     write_to_exchange(exchange, {"type": "hello", "team": team_name.upper()})
     hello_from_exchange = read_from_exchange(exchange)
@@ -104,7 +114,8 @@ def main():
                 trade_adr(message)
             else:
                 trade_etf(message)
-
+        else:
+            
 
 
 
