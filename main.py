@@ -49,11 +49,53 @@ def read_from_exchange(exchange):
 all_symbols = ["BOND", "VALBZ", "VALE", "GS", "MS", "WFC", "XLF"]
 
 order_count = 0
-book = {s: {"buy": None, "sell": None} for s in all_symbols}
-executed_trades = {s: {"buy": [], "sell": []} for s in all_symbols} #running list of executed orders
-positions = {}
-all_orders = []
+executed_trades = {s: [] for s in all_symbols} #running list of executed orders
 order_index = 0
+
+
+book = {s: {"buy": None, "sell": None} for s in all_symbols}
+def best_book(symbol, dir):
+    return book[symbol][dir]
+    
+def has_book(symbols):
+    if type(symbols) == str:
+        symbols = [symbols]
+    for s in symbols:
+        if book[s]["buy"] is None or book[s]["sell"] is None:
+            return False
+    
+    return True
+
+def update_book(message):
+    global book
+    buy_side = message["buy"]
+    sell_side = message["sell"]
+    symbol = message["symbol"]
+    
+        ## price
+    if len(buy_side) > 0:
+        book[symbol]["buy"] = buy_side[0]
+    if len(sell_side) > 0:
+        book[symbol]["sell"] = sell_side[0]
+    return 
+
+positions = {s: 0 for s in all_symbols}
+def update_positions(message):
+    global positions
+    positions[message["symbol"]] += message["size"] * (1 if (message["dir"] == "BUY") else -1)
+
+def update_positions_from_ack(message):
+    global positions, convert_history
+    order_id = message["order_id"]
+    if order_id not in convert_history:
+        return
+    order = convert_history[order_id]
+    factor = (1 if (order["dir"] == "BUY") else -1)
+    amt = order["size"]
+    if message["symbol"] == "XLF":
+        positions["XLF"] += factor * amt
+        positions["BOND"] 
+        
 
 
 last_symbol_order = {s: 0 for s in all_symbols}
@@ -76,6 +118,15 @@ def do_order(symbol, dir, price, size):
     order = {"type": "add", "order_id": order_count, "symbol": symbol, "dir": dir, "price": price, "size": size}
     last_symbol_order[symbol] = time.time()
     
+    write_to_exchange(exchange, order)
+    order_count += 1
+
+convert_history = {}
+
+def convert(symbol, dir, size):
+    global order_count
+    order = {"type": "convert", "order_id": order_count, "symbol": symbol, "dir": dir, "size": size}
+    convert_history[order_count] = order
     write_to_exchange(exchange, order)
     order_count += 1
 
@@ -112,6 +163,7 @@ def trade_adr(message):
         ## if VALE buy is more expensive than VALBZ, then buy VALBZ and sell VALE
         if VALE_fair > VALBZ_fair:
             ## buy VABLZ, sell VALE
+            do_multi_trade(["VALBZ"], ["VALE"])
             if last_symbol_order["VALBZ"] < last_symbol_order["VALE"]:
                 do_order("VALBZ", "BUY", VALBZ_buy[0], VALBZ_buy[1])
             else:
@@ -119,32 +171,30 @@ def trade_adr(message):
         
         else:
             ## sell VALBZ, buy VALE
-            if last_symbol_order["VALBZ"] < last_symbol_order["VALE"]:
-                do_order("VALBZ", "SELL", VALBZ_sell[0], VALBZ_sell[1])
-            else:
-                do_order("VALE", "BUY", VALE_buy[0], VALE_buy[1])
+            do_multi_trade(["VALE"], ["VALBZ"])
 
     else:
         return
 
-def etf_trade(buy_side, sell_side):
+def do_multi_trade(buy_side, sell_side):
     trade_symbol = get_oldest_symbol(buy_side + sell_side)
     if trade_symbol in buy_side:
-        trade_dir = "BUY"
+        trade_dir = "buy"
     elif trade_symbol in sell_side:
-        trade_dir = "SELL"
+        trade_dir = "sell"
     else:
         print("WARNING: WEIRD SPOT 1")
+        return
     my_order = best_book(trade_symbol, trade_dir)
-    do_order(trade_symbol, trade_dir, my_order[0], my_order[1])
+    do_order(trade_symbol, trade_dir.upper(), my_order[0], my_order[1])
 
 
 
 def trade_etf(message):
-    edge = 3
+    edge = 1
     conversion = 100
     
-    if not has_book(["GS", "MS", "WFC", "XLF"]):
+    if not has_book(["BOND", "GS", "MS", "WFC", "XLF"]):
         return
     
     
@@ -164,50 +214,43 @@ def trade_etf(message):
     XLF_fair = (XLF_buy[0] + XLF_sell[0]) / 2.0
     
     
+    basket_fair = (3 * BOND_fair + 2 * GS_fair + 3 * MS_fair + 2 * WFC_fair) / 10
+    print("basket/xlf fair", basket_fair, XLF_fair)
+    
     ## if basket sum > ETF, we should buy ETF and sell basket
-    if ((3*BOND_fair + 2*GS_fair + 3*MS_fair + 2* WFC_fair) > (XLF_fair+ edge + conversion//4)):
+    if basket_fair > XLF_fair + edge:
         # consider adding a check to not trade bonds at a bad price
-        etf_trade(["XLF"], ["BOND", "GS", "MS", "WFC"])
+        print("buying xlf, selling basket")
+        do_multi_trade(["XLF"], [])
+        # do_multi_trade(["XLF"], ["BOND", "GS", "MS", "WFC"])
         return
-    elif ((3*BOND_fair + 2*GS_fair + 3*MS_fair + 2* WFC_fair+ edge + conversion//4) < (XLF_fair)):
-        etf_trade(["BOND", "GS", "MS", "WFC"], ["XLF"])
+    elif basket_fair < XLF_fair:
+        print("selling xlf, buying basket")
+        do_multi_trade([], ["XLF"])
+        # do_multi_trade(["BOND", "GS", "MS", "WFC"], ["XLF"])
         return
-
-def best_book(symbol, dir):
-    return book[symbol][dir]
-    
-
-def has_book(symbols):
-    if type(symbols) == str:
-        symbols = [symbols]
-    for s in symbols:
-        if book[s]["buy"] is None or book[s]["sell"] is None:
-            return False
-    
-    return True
-
-def update_positions(message):
-    global positions
-    positions[message["symbol"]] += message["size"] * (1 if (message["dir"] == "BUY") else -1)
-
-def update_book(message):
-    global book
-    buy_side = message["buy"]
-    sell_side = message["sell"]
-    symbol = message["symbol"]
-    if symbol != "BOND":
-        ## price
-        if len(buy_side) > 0:
-            book[symbol]["buy"] = buy_side[0]
-        if len(sell_side) > 0:
-            book[symbol]["sell"] = sell_side[0]
-    return 
 
 def num_traded(symbol):
     sum = 0
     for arr in executed_trades[symbol]:
         sum += arr[1]
-    return sum    
+    return sum
+    
+def xlf_basket_FV():
+    
+    
+
+def exec_fair_value(symbol):
+    sum = 0
+    num = 0
+    for arr in executed_trades[symbol]:
+        sum += arr[0] * arr[1]
+        num += arr[1]
+    
+    if num != 0:
+        return (sum * 1.0) / num
+    else:
+        return 0
 
 def update_executed(message):
     global executed_trades
@@ -217,20 +260,52 @@ def update_executed(message):
     
     if symbol != "BOND":
         executed_trades[symbol].append([price, size])
+        if(len(executed_trades[symbol]) > 20):
+            executed_trades[symbol] = executed_trades[symbol][1:]
+
     return
     
-# def convert_ADR():
-#     global positions
-#     if positions["VALE"]
+def convert_ADR():
+    global positions
+    global book
+    edge = 1
+    conversion  = 10
+
+    VALBZ_buy = book["VALBZ"]["buy"]
+    VALBZ_sell = book["VALBZ"]["sell"]
+    VALE_buy = book["VALE"]["buy"]
+    VALE_sell = book["VALE"]["sell"]
+
+    VALBZ_fair = (VALBZ_buy[0] + VALBZ_sell[0]) / 2.0
+    VALE_fair = (VALE_buy[0] + VALE_sell[0]) / 2.0
+
+    if positions["VALE"] > 8:
+        ## we want to convert VALE => VALBZ
+        if VALBZ_fair > VALE_fair + conversion/4.0:
+            convert("VALE", "SELL", 4)
+            return  
+    elif positions["VALE"] < -8:
+        ## we want to convert VALBZ to VALE
+        if VALE_fair > VALBZ_fair + conversion/4.0:
+            convert("VALE", "BUY", 4)
+            return
+    elif positions["VALBZ"] > 8:
+        ## we want to convert VALBZ to VALE
+        pass
+    elif positions["VALBZ"] < -8:
+        ## we want to convert VALE => VALBZ
+        pass
 
 def convert_ETF():
     global positions
     global book
-    hundred = ["XLF, GS, MS, WFC"]
+    edge = 1
     conversion = 100
-    edge= 3
-    if not has_book(["GS", "MS", "WFC", "XLF"]):
+    
+    if not has_book(["BOND", "GS", "MS", "WFC", "XLF"]):
         return
+    
+    hundred = ["GS", "MS", "WFC", "XLF"]
     
     GS_buy = book["GS"]["buy"]
     GS_sell = book["GS"]["sell"]
@@ -246,12 +321,29 @@ def convert_ETF():
     MS_fair = (MS_buy[0] + MS_sell[0]) / 2.0
     WFC_fair = (WFC_buy[0] + WFC_sell[0]) / 2.0
     XLF_fair = (XLF_buy[0] + XLF_sell[0]) / 2.0
+    
+    
+    basket_fair = (3 * BOND_fair + 2 * GS_fair + 3 * MS_fair + 2 * WFC_fair) / 10.0
 
-    ## if basket sum > ETF, we should buy ETF and sell basket
-    if ((3*BOND_fair + 2*GS_fair + 3*MS_fair + 2* WFC_fair) > (XLF_fair+ edge + conversion)):
-        if positions["XLF"] > 10:
-            
-        # convert ETF to individual stocks
+    for symbol in hundred:
+        if symbol == "XLF":
+            if positions[symbol] > 80: ## we have too many ETF
+                ## convert ETF to individual stock
+                if basket_fair >  XLF_fair + conversion/40:
+                    print("CONVERT XLF SELL")
+                    convert("XLF", "SELL", 40)
+                    return
+            elif positions[symbol] < -80: ## too little ETF
+                if basket_fair +  conversion/40< XLF_fair:
+                    print("CONVERT XLF BUY")
+                    ## we will convert individual stocks to ETF
+                    convert("XLF", "BUY", 40)
+                    return
+        else:
+            if positions[symbol] > 80: ## we have too much of an individual stock
+                pass
+            elif positions[symbol] < -80: ## we have too little of an invidual sotck
+                pass       
         return
         
 def allowed_positions(message):
@@ -289,13 +381,16 @@ def main():
             if message["symbol"] == "BOND":
                 trade_bonds(message)
             elif message["symbol"] == "VALBZ" or message["symbol"] == "VALE":
+                # continue
                 trade_adr(message)
             else:
                 trade_etf(message)
         elif message["type"] == "fill":
             update_positions(message)
+            convert_ETF()
         elif message["type"] == "trade":
             update_executed(message)
+
 
 
 
