@@ -331,7 +331,16 @@ def num_traded(symbol):
 def exec_fair_value(symbol):
     if symbol not in executed_trades:
         return 0
+ons["VALBZ"] -= factor * amt
+        
 
+
+last_symbol_order = {s: 0 for s in all_symbols}
+
+def get_oldest_symbol(symbols):
+    best_symbol = symbols[0]
+    best_time = float("inf")
+    for s in symbols:
     sum = 0
     num = 0
     for arr in executed_trades[symbol]:
